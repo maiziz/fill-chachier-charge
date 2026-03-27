@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-sans);
+  --font-handwriting-latin: var(--font-handwriting-latin);
+  --font-handwriting-arabic: var(--font-handwriting-arabic);
+}
