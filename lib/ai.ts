@@ -1,6 +1,30 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { Field, ChatMessage } from '../types';
 
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 5, baseDelay = 2000): Promise<T> {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      attempt++;
+      const isRateLimit = 
+        error?.status === 429 || 
+        error?.status === 'RESOURCE_EXHAUSTED' || 
+        error?.error?.code === 429 ||
+        (error?.message && (error.message.includes('429') || error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('quota')));
+        
+      if (attempt >= maxRetries || !isRateLimit) {
+        throw error;
+      }
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.warn(`Rate limited. Retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error('Max retries reached');
+}
+
 export async function analyzeSinglePage(pageBase64: string, pageIndex: number, modelName: string = 'gemini-3-flash-preview'): Promise<Field[]> {
   const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini API key is missing');
@@ -8,7 +32,7 @@ export async function analyzeSinglePage(pageBase64: string, pageIndex: number, m
   const ai = new GoogleGenAI({ apiKey });
   const base64Data = pageBase64.split(',')[1];
   
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: modelName,
     contents: {
       parts: [
@@ -54,12 +78,12 @@ export async function analyzeSinglePage(pageBase64: string, pageIndex: number, m
         },
       },
     },
-  });
+  }));
 
   if (response.text) {
     try {
       const pageFields = JSON.parse(response.text);
-      return pageFields.map((f: any) => ({ ...f, pageIndex }));
+      return pageFields.map((f: any, index: number) => ({ ...f, id: `${f.id}_page_${pageIndex}_${index}`, pageIndex }));
     } catch (e) {
       console.error('Failed to parse fields for page', pageIndex, e);
     }
@@ -69,31 +93,51 @@ export async function analyzeSinglePage(pageBase64: string, pageIndex: number, m
 
 export async function analyzeDocumentPages(pagesBase64: string[]): Promise<Field[]> {
   let allFields: Field[] = [];
+  
   for (let i = 0; i < pagesBase64.length; i++) {
-    const pageFields = await analyzeSinglePage(pagesBase64[i], i);
-    allFields = [...allFields, ...pageFields];
+    try {
+      const pageFields = await analyzeSinglePage(pagesBase64[i], i);
+      allFields = [...allFields, ...pageFields];
+      
+      // Add a small delay between pages to help avoid rate limits
+      if (i < pagesBase64.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch (error) {
+      console.error(`Failed to analyze page ${i + 1}`, error);
+      // We can continue with other pages even if one fails
+    }
   }
+  
   return allFields;
 }
 
 export async function chatWithAI(
   messages: ChatMessage[],
   fields: Field[],
-  modelName: string = 'gemini-3-flash-preview'
+  modelName: string = 'gemini-3-flash-preview',
+  customSystemPrompt?: string
 ): Promise<{ reply: string; updatedFields: { id: string; value: string }[] }> {
   const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini API key is missing');
 
   const ai = new GoogleGenAI({ apiKey });
 
-  const systemInstruction = `You are an AI assistant helping a user fill out a specification document (Cahier de Charge).
+  const fieldsJson = JSON.stringify(fields.map(f => ({ id: f.id, label: f.label, value: f.value || null })), null, 2);
+  
+  let systemInstruction = customSystemPrompt || `You are an AI assistant helping a user fill out a specification document (Cahier de Charge).
 Here are the fields that need to be filled:
-${JSON.stringify(fields.map(f => ({ id: f.id, label: f.label, value: f.value || null })), null, 2)}
+{{FIELDS}}
 
-Your goal is to interview the user to collect the missing information.
-Ask for one or two pieces of information at a time. Be polite and professional.
-If the user provides information, you MUST call the 'updateFields' function to save it.
+Your goal is to collect the missing information to fill these fields.
+CRITICAL INSTRUCTION: If the user provides a document (like a PDF, scanned document, image, or text file) or a large block of text, you MUST thoroughly analyze it to extract information for ALL possible empty fields. Do not stop after finding just one or two fields. Extract as much information as possible to save the user time.
+You MUST call the 'updateFields' function with all the extracted values. If there are many fields to update, you can include them all in a single 'updateFields' call, or you can call it multiple times if needed.
+If you need more information, ask the user for missing information. Be polite and professional.
+If the user provides information in chat, you MUST call the 'updateFields' function to save it.
 If all fields are filled, tell the user they can now export the document.`;
+
+  // Replace the placeholder with actual fields JSON
+  systemInstruction = systemInstruction.replace('{{FIELDS}}', fieldsJson);
 
   const updateFieldsDeclaration = {
     name: 'updateFields',
@@ -157,14 +201,14 @@ If all fields are filled, tell the user they can now export the document.`;
     };
   });
 
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: modelName,
     contents: formattedMessages,
     config: {
       systemInstruction,
       tools: [{ functionDeclarations: [updateFieldsDeclaration] }],
     },
-  });
+  }));
 
   let reply = response.text || '';
   let updatedFields: { id: string; value: string }[] = [];
@@ -183,4 +227,27 @@ If all fields are filled, tell the user they can now export the document.`;
   }
 
   return { reply, updatedFields };
+}
+
+export async function enhancePromptWithAI(prompt: string, modelName: string = 'gemini-3.1-pro-preview'): Promise<string> {
+  const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Gemini API key is missing');
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: modelName,
+    contents: `You are an expert prompt engineer for Large Language Models. 
+The user has provided a base prompt for an AI document extraction and form-filling task.
+Your job is to enhance and optimize this prompt to be highly effective, clear, and robust.
+Ensure it instructs the AI to be thorough, accurate, and to use the 'updateFields' function correctly.
+The prompt MUST include the placeholder "{{FIELDS}}" where the JSON of fields will be injected.
+
+Original Prompt:
+${prompt}
+
+Return ONLY the improved prompt text, nothing else. Do not wrap it in markdown code blocks.`,
+  }));
+
+  return response.text || prompt;
 }

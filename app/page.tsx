@@ -4,11 +4,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { DocumentUploader } from '../components/DocumentUploader';
 import { DocumentViewer } from '../components/DocumentViewer';
 import { ChatSidebar } from '../components/ChatSidebar';
+import { PromptSettingsModal } from '../components/PromptSettingsModal';
 import { convertPdfToImages } from '../lib/pdf-utils';
 import { analyzeDocumentPages, chatWithAI, analyzeSinglePage } from '../lib/ai';
 import { Field, ChatMessage, Project } from '../types';
-import { FileText, Download, PenTool, Type, Database, X, ChevronLeft } from 'lucide-react';
+import { FileText, Download, PenTool, Type, Database, X, ChevronLeft, Settings, Upload, FileUp } from 'lucide-react';
 import { saveProject } from '../lib/storage';
+import Papa from 'papaparse';
 
 export default function Home() {
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -21,6 +23,25 @@ export default function Home() {
   const [showJsonLayer, setShowJsonLayer] = useState(false);
   const [jsonContent, setJsonContent] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
+  const [globalFont, setGlobalFont] = useState<string>('');
+  
+  // New state variables
+  const [defaultHeight, setDefaultHeight] = useState(50);
+  const [defaultWidth, setDefaultWidth] = useState(200);
+  const [defaultFontSize, setDefaultFontSize] = useState(14);
+  const [showPromptSettings, setShowPromptSettings] = useState(false);
+  const [systemPrompt, setSystemPrompt] = useState(`You are an AI assistant helping a user fill out a specification document (Cahier de Charge).
+Here are the fields that need to be filled:
+{{FIELDS}}
+
+Your goal is to collect the missing information to fill these fields.
+CRITICAL INSTRUCTION: If the user provides a document (like a PDF, scanned document, image, or text file) or a large block of text, you MUST thoroughly analyze it to extract information for ALL possible empty fields. Do not stop after finding just one or two fields. Extract as much information as possible to save the user time.
+You MUST call the 'updateFields' function with all the extracted values. If there are many fields to update, you can include them all in a single 'updateFields' call, or you can call it multiple times if needed.
+If you need more information, ask the user for missing information. Be polite and professional.
+If the user provides information in chat, you MUST call the 'updateFields' function to save it.
+If all fields are filled, tell the user they can now export the document.`);
+
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-save project
   useEffect(() => {
@@ -57,15 +78,15 @@ export default function Home() {
 
   const handleAddField = (pageIndex: number) => {
     const newField: Field = {
-      id: `manual-${Date.now()}`,
+      id: `manual-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       label: 'Manual Field',
       type: 'text',
       pageIndex,
       boundingBox: {
         ymin: 100,
         xmin: 100,
-        ymax: 150,
-        xmax: 300,
+        ymax: 100 + defaultHeight,
+        xmax: 100 + defaultWidth,
       },
       value: '',
     };
@@ -112,13 +133,13 @@ export default function Home() {
   };
 
   const handleSendMessage = async (content: string, attachment?: ChatMessage['attachment']) => {
-    const newUserMsg: ChatMessage = { id: Date.now().toString(), role: 'user' as const, content, attachment };
+    const newUserMsg: ChatMessage = { id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, role: 'user' as const, content, attachment };
     const newMessages = [...messages, newUserMsg];
     setMessages(newMessages);
     setIsProcessing(true);
 
     try {
-      const { reply, updatedFields } = await chatWithAI(newMessages, fields, selectedModel);
+      const { reply, updatedFields } = await chatWithAI(newMessages, fields, selectedModel, systemPrompt);
       
       if (updatedFields.length > 0) {
         setFields((prevFields) => {
@@ -135,13 +156,13 @@ export default function Home() {
 
       setMessages((prev) => [
         ...prev,
-        { id: (Date.now() + 1).toString(), role: 'assistant', content: reply },
+        { id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, role: 'assistant', content: reply },
       ]);
     } catch (error) {
       console.error('Error chatting with AI:', error);
       setMessages((prev) => [
         ...prev,
-        { id: (Date.now() + 1).toString(), role: 'assistant', content: "Sorry, I encountered an error. Please try again." },
+        { id: `msg-err-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, role: 'assistant', content: "Sorry, I encountered an error. Please try again." },
       ]);
     } finally {
       setIsProcessing(false);
@@ -246,7 +267,7 @@ export default function Home() {
       if (!fieldToClone) return prev;
       const newField: Field = {
         ...fieldToClone,
-        id: Date.now().toString(),
+        id: `clone-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
         boundingBox: {
           ...fieldToClone.boundingBox,
           ymin: fieldToClone.boundingBox.ymin + 50,
@@ -255,6 +276,10 @@ export default function Home() {
       };
       return [...prev, newField];
     });
+  };
+
+  const handleDeleteField = (id: string) => {
+    setFields((prev) => prev.filter((f) => f.id !== id));
   };
 
   const openJsonLayer = () => {
@@ -276,6 +301,55 @@ export default function Home() {
     }
   };
 
+  const handleExportCSV = () => {
+    if (fields.length === 0) return;
+    const csvData = fields.map(f => ({
+      ID: f.id,
+      Label: f.label,
+      Value: f.value || '',
+      Type: f.type,
+      Page: f.pageIndex
+    }));
+    const csv = Papa.unparse(csvData);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${projectName || 'document'}_fields.csv`;
+    link.click();
+  };
+
+  const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    Papa.parse(file, {
+      header: true,
+      complete: (results) => {
+        const data = results.data as any[];
+        setFields(prev => {
+          const newFields = [...prev];
+          data.forEach(row => {
+            if (row.ID && row.Value !== undefined) {
+              const fieldIndex = newFields.findIndex(f => f.id === row.ID);
+              if (fieldIndex !== -1) {
+                newFields[fieldIndex] = { ...newFields[fieldIndex], value: row.Value };
+              }
+            }
+          });
+          return newFields;
+        });
+      },
+      error: (error) => {
+        console.error('CSV parse error:', error);
+        alert('Failed to parse CSV file.');
+      }
+    });
+    // Reset input
+    if (csvInputRef.current) {
+      csvInputRef.current.value = '';
+    }
+  };
+
   if (pages.length === 0) {
     return (
       <main className="min-h-screen bg-stone-50">
@@ -292,66 +366,168 @@ export default function Home() {
 
   return (
     <main className="h-screen flex flex-col bg-stone-50 overflow-hidden">
-      {/* Top Bar */}
-      <header className="h-16 bg-white border-b border-stone-200 flex items-center justify-between px-6 shrink-0 z-20">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={handleBackToProjects}
-            className="p-2 -ml-2 text-stone-500 hover:text-stone-900 hover:bg-stone-100 rounded-full transition-colors"
-            title="Back to Projects"
-          >
-            <ChevronLeft size={20} />
-          </button>
-          <div className="flex items-center gap-2 text-amber-700">
-            <FileText size={24} />
-            <h1 className="font-semibold text-stone-800 truncate max-w-[200px] sm:max-w-xs">{projectName || 'Cahier de Charge Automator'}</h1>
+      {/* Top Bar - Two Lines */}
+      <header className="bg-white border-b border-stone-200 shrink-0 z-20 flex flex-col">
+        {/* Top Line */}
+        <div className="h-14 flex items-center justify-between px-6 border-b border-stone-100">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={handleBackToProjects}
+              className="p-2 -ml-2 text-stone-500 hover:text-stone-900 hover:bg-stone-100 rounded-full transition-colors"
+              title="Back to Projects"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <div className="flex items-center gap-2 text-amber-700">
+              <FileText size={24} />
+              <h1 className="font-semibold text-stone-800 truncate max-w-[200px] sm:max-w-xs">{projectName || 'Cahier de Charge Automator'}</h1>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-4">
+            <div className="flex items-center bg-stone-100 p-1 rounded-lg">
+              <button
+                onClick={() => setIsHandwritten(false)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  !isHandwritten ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'
+                }`}
+              >
+                <Type size={16} />
+                Typed
+              </button>
+              <button
+                onClick={() => setIsHandwritten(true)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  isHandwritten ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'
+                }`}
+              >
+                <PenTool size={16} />
+                Handwritten
+              </button>
+            </div>
+
+            <select
+              value={globalFont}
+              onChange={(e) => setGlobalFont(e.target.value)}
+              className="bg-stone-100 hover:bg-stone-200 text-stone-700 px-3 py-2 rounded-lg text-sm font-medium transition-colors outline-none cursor-pointer"
+            >
+              <option value="">Default Font</option>
+              <optgroup label="Handwritten">
+                <option value="var(--font-handwriting-latin)">Caveat</option>
+                <option value="var(--font-dancing-script)">Dancing Script</option>
+                <option value="var(--font-indie-flower)">Indie Flower</option>
+                <option value="var(--font-handwriting-arabic)">Aref Ruqaa (Arabic)</option>
+              </optgroup>
+              <optgroup label="Typed">
+                <option value="var(--font-sans)">Inter</option>
+                <option value="var(--font-roboto-mono)">Roboto Mono</option>
+                <option value="monospace">Monospace</option>
+                <option value="serif">Serif</option>
+              </optgroup>
+            </select>
+            
+            <button
+              onClick={handleExportPDF}
+              disabled={isProcessing}
+              className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+            >
+              <Download size={18} />
+              Export PDF
+            </button>
           </div>
         </div>
         
-        <div className="flex items-center gap-4">
-          <div className="flex items-center bg-stone-100 p-1 rounded-lg">
-            <button
-              onClick={() => setIsHandwritten(false)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                !isHandwritten ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'
-              }`}
-            >
-              <Type size={16} />
-              Typed
-            </button>
-            <button
-              onClick={() => setIsHandwritten(true)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                isHandwritten ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'
-              }`}
-            >
-              <PenTool size={16} />
-              Handwritten
-            </button>
+        {/* Bottom Line */}
+        <div className="h-12 flex items-center justify-between px-6 bg-stone-50 text-sm">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 text-stone-600">
+              <span className="font-medium">Default Field:</span>
+              <label className="flex items-center gap-1">
+                W:
+                <input 
+                  type="number" 
+                  value={defaultWidth} 
+                  onChange={(e) => setDefaultWidth(Number(e.target.value))}
+                  className="w-16 px-1 py-0.5 border border-stone-300 rounded bg-white"
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                H:
+                <input 
+                  type="number" 
+                  value={defaultHeight} 
+                  onChange={(e) => setDefaultHeight(Number(e.target.value))}
+                  className="w-16 px-1 py-0.5 border border-stone-300 rounded bg-white"
+                />
+              </label>
+            </div>
+            <div className="flex items-center gap-2 text-stone-600">
+              <span className="font-medium">Font Size:</span>
+              <input 
+                type="number" 
+                value={defaultFontSize} 
+                onChange={(e) => setDefaultFontSize(Number(e.target.value))}
+                className="w-16 px-1 py-0.5 border border-stone-300 rounded bg-white"
+              />
+              <span>px</span>
+            </div>
           </div>
           
-          <button
-            onClick={openJsonLayer}
-            className="flex items-center gap-2 bg-stone-100 hover:bg-stone-200 text-stone-700 px-4 py-2 rounded-lg font-medium transition-colors"
-          >
-            <Database size={18} />
-            JSON Data
-          </button>
-
-          <button
-            onClick={handleExportPDF}
-            disabled={isProcessing}
-            className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
-          >
-            <Download size={18} />
-            Export PDF
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowPromptSettings(true)}
+              className="flex items-center gap-1.5 text-stone-600 hover:text-amber-600 transition-colors"
+            >
+              <Settings size={16} />
+              Prompt Settings
+            </button>
+            <div className="w-px h-4 bg-stone-300 mx-1"></div>
+            <button
+              onClick={() => csvInputRef.current?.click()}
+              className="flex items-center gap-1.5 text-stone-600 hover:text-amber-600 transition-colors"
+            >
+              <Upload size={16} />
+              Import CSV
+            </button>
+            <input 
+              type="file" 
+              accept=".csv" 
+              className="hidden" 
+              ref={csvInputRef} 
+              onChange={handleImportCSV} 
+            />
+            <button
+              onClick={handleExportCSV}
+              className="flex items-center gap-1.5 text-stone-600 hover:text-amber-600 transition-colors"
+            >
+              <FileUp size={16} />
+              Export CSV
+            </button>
+            <div className="w-px h-4 bg-stone-300 mx-1"></div>
+            <button
+              onClick={openJsonLayer}
+              className="flex items-center gap-1.5 text-stone-600 hover:text-amber-600 transition-colors"
+            >
+              <Database size={16} />
+              JSON Data
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        <DocumentViewer pages={pages} fields={fields} isHandwritten={isHandwritten} onUpdateField={handleUpdateField} onCloneField={handleCloneField} onAddField={handleAddField} />
+        <DocumentViewer 
+          pages={pages} 
+          fields={fields} 
+          isHandwritten={isHandwritten} 
+          globalFont={globalFont}
+          defaultFontSize={defaultFontSize}
+          onUpdateField={handleUpdateField} 
+          onCloneField={handleCloneField} 
+          onAddField={handleAddField} 
+          onDeleteField={handleDeleteField}
+        />
         <ChatSidebar
           fields={fields}
           messages={messages}
@@ -359,6 +535,7 @@ export default function Home() {
           isProcessing={isProcessing}
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
+          onUpdateField={handleUpdateField}
         />
       </div>
 
@@ -395,6 +572,13 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      <PromptSettingsModal
+        isOpen={showPromptSettings}
+        onClose={() => setShowPromptSettings(false)}
+        currentPrompt={systemPrompt}
+        onSave={setSystemPrompt}
+      />
     </main>
   );
 }

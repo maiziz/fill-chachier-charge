@@ -3,18 +3,21 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Field } from '../types';
 import { Rnd } from 'react-rnd';
-import { Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight, Plus, Minus, Copy, PlusSquare, RotateCcw, RotateCw } from 'lucide-react';
+import { Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight, Plus, Minus, Copy, PlusSquare, RotateCcw, RotateCw, Trash2 } from 'lucide-react';
 
 interface DocumentViewerProps {
   pages: string[];
   fields: Field[];
   isHandwritten: boolean;
+  globalFont: string;
+  defaultFontSize: number;
   onUpdateField: (id: string, updates: Partial<Field>) => void;
   onCloneField: (id: string) => void;
   onAddField: (pageIndex: number) => void;
+  onDeleteField: (id: string) => void;
 }
 
-export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField, onCloneField, onAddField }: DocumentViewerProps) {
+export function DocumentViewer({ pages, fields, isHandwritten, globalFont, defaultFontSize, onUpdateField, onCloneField, onAddField, onDeleteField }: DocumentViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [imageDimensions, setImageDimensions] = useState<{ [key: number]: { width: number; height: number } }>({});
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null);
@@ -108,7 +111,26 @@ export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField, on
                   
                   {/* Floating Toolbar */}
                   {isActive && (
-                    <div className="floating-toolbar absolute -top-10 left-0 bg-white shadow-lg rounded-md border border-stone-200 flex items-center p-1 gap-1 z-50">
+                    <div className="floating-toolbar absolute -top-12 left-0 bg-white shadow-lg rounded-md border border-stone-200 flex items-center p-1 gap-1 z-50 whitespace-nowrap">
+                      <select
+                        value={field.styles?.fontFamily || globalFont || (isHandwritten ? (isArabic ? 'var(--font-handwriting-arabic)' : 'var(--font-handwriting-latin)') : 'var(--font-sans)')}
+                        onChange={(e) => onUpdateField(field.id, { styles: { ...field.styles, fontFamily: e.target.value }})}
+                        className="text-xs border rounded px-1 py-1 bg-stone-50 hover:bg-stone-100 outline-none"
+                      >
+                        <optgroup label="Handwritten">
+                          <option value="var(--font-handwriting-latin)">Caveat</option>
+                          <option value="var(--font-dancing-script)">Dancing Script</option>
+                          <option value="var(--font-indie-flower)">Indie Flower</option>
+                          <option value="var(--font-handwriting-arabic)">Aref Ruqaa (Arabic)</option>
+                        </optgroup>
+                        <optgroup label="Typed">
+                          <option value="var(--font-sans)">Inter</option>
+                          <option value="var(--font-roboto-mono)">Roboto Mono</option>
+                          <option value="monospace">Monospace</option>
+                          <option value="serif">Serif</option>
+                        </optgroup>
+                      </select>
+                      <div className="w-px h-4 bg-stone-300 mx-1" />
                       <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontWeight: field.styles?.fontWeight === 'bold' ? 'normal' : 'bold' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.fontWeight === 'bold' ? 'bg-stone-200' : ''}`}><Bold size={14} /></button>
                       <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontStyle: field.styles?.fontStyle === 'italic' ? 'normal' : 'italic' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.fontStyle === 'italic' ? 'bg-stone-200' : ''}`}><Italic size={14} /></button>
                       <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, textDecoration: field.styles?.textDecoration === 'underline' ? 'none' : 'underline' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.textDecoration === 'underline' ? 'bg-stone-200' : ''}`}><Underline size={14} /></button>
@@ -117,9 +139,9 @@ export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField, on
                       <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, textAlign: 'center' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.textAlign === 'center' ? 'bg-stone-200' : ''}`}><AlignCenter size={14} /></button>
                       <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, textAlign: 'right' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.textAlign === 'right' ? 'bg-stone-200' : ''}`}><AlignRight size={14} /></button>
                       <div className="w-px h-4 bg-stone-300 mx-1" />
-                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontSize: (field.styles?.fontSize || (isHandwritten ? 24 : 14)) - 2 }})} className="p-1 rounded hover:bg-stone-100"><Minus size={14} /></button>
-                      <span className="text-xs font-medium w-4 text-center">{field.styles?.fontSize || (isHandwritten ? 24 : 14)}</span>
-                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontSize: (field.styles?.fontSize || (isHandwritten ? 24 : 14)) + 2 }})} className="p-1 rounded hover:bg-stone-100"><Plus size={14} /></button>
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontSize: (field.styles?.fontSize || defaultFontSize) - 2 }})} className="p-1 rounded hover:bg-stone-100"><Minus size={14} /></button>
+                      <span className="text-xs font-medium w-4 text-center">{field.styles?.fontSize || defaultFontSize}</span>
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontSize: (field.styles?.fontSize || defaultFontSize) + 2 }})} className="p-1 rounded hover:bg-stone-100"><Plus size={14} /></button>
                       <div className="w-px h-4 bg-stone-300 mx-1" />
                       <button onClick={() => {
                         const currentRotation = parseInt(field.styles?.transform?.replace(/[^0-9-]/g, '') || '0');
@@ -130,7 +152,23 @@ export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField, on
                         onUpdateField(field.id, { styles: { ...field.styles, transform: `rotate(${currentRotation + 1}deg)` }});
                       }} className="p-1 rounded hover:bg-stone-100" title="Rotate Right"><RotateCw size={14} /></button>
                       <div className="w-px h-4 bg-stone-300 mx-1" />
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-stone-500 font-medium">W:</span>
+                        <input type="number" value={Math.round(width)} onChange={(e) => {
+                          const newWidth = parseInt(e.target.value) || 10;
+                          const newXmax = (field.boundingBox.xmin / 1000) * dimensions.width + newWidth;
+                          onUpdateField(field.id, { boundingBox: { ...field.boundingBox, xmax: (newXmax / dimensions.width) * 1000 } });
+                        }} className="w-12 text-xs border rounded px-1 py-0.5 outline-none" />
+                        <span className="text-[10px] text-stone-500 font-medium ml-1">H:</span>
+                        <input type="number" value={Math.round(height)} onChange={(e) => {
+                          const newHeight = parseInt(e.target.value) || 10;
+                          const newYmax = (field.boundingBox.ymin / 1000) * dimensions.height + newHeight;
+                          onUpdateField(field.id, { boundingBox: { ...field.boundingBox, ymax: (newYmax / dimensions.height) * 1000 } });
+                        }} className="w-12 text-xs border rounded px-1 py-0.5 outline-none" />
+                      </div>
+                      <div className="w-px h-4 bg-stone-300 mx-1" />
                       <button onClick={() => onCloneField(field.id)} className="p-1 rounded hover:bg-stone-100 text-blue-600" title="Clone Field"><Copy size={14} /></button>
+                      <button onClick={() => onDeleteField(field.id)} className="p-1 rounded hover:bg-stone-100 text-red-600" title="Delete Field"><Trash2 size={14} /></button>
                     </div>
                   )}
 
@@ -141,15 +179,16 @@ export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField, on
                       onFocus={() => setActiveFieldId(field.id)}
                       className={`
                         w-full h-full bg-transparent border-none outline-none text-blue-900 leading-tight resize-none overflow-hidden
-                        ${isHandwritten ? (isArabic ? 'font-handwriting-arabic' : 'font-handwriting-latin') : 'font-sans'}
+                        ${!(field.styles?.fontFamily || globalFont) ? (isHandwritten ? (isArabic ? 'font-handwriting-arabic' : 'font-handwriting-latin') : 'font-sans') : ''}
                       `}
                       style={{
-                        fontSize: field.styles?.fontSize ? `${field.styles.fontSize}px` : (isHandwritten ? '24px' : '14px'),
+                        fontSize: field.styles?.fontSize ? `${field.styles.fontSize}px` : `${defaultFontSize}px`,
                         textAlign: field.styles?.textAlign || 'left',
                         textDecoration: field.styles?.textDecoration || 'none',
                         fontWeight: field.styles?.fontWeight || 'normal',
                         fontStyle: field.styles?.fontStyle || 'normal',
                         transform: field.styles?.transform || 'none',
+                        fontFamily: field.styles?.fontFamily || globalFont || undefined,
                       }}
                       dir={isArabic ? 'rtl' : 'ltr'}
                     />

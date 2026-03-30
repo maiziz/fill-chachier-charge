@@ -17,6 +17,7 @@ export interface Field {
     fontWeight?: 'normal' | 'bold';
     fontStyle?: 'normal' | 'italic';
     transform?: string;
+    fontFamily?: string;
   };
 }
 
