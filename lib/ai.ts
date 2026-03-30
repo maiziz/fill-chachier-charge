@@ -1,83 +1,85 @@
 import { GoogleGenAI, Type } from '@google/genai';
-import { Field } from '../types';
+import { Field, ChatMessage } from '../types';
 
-export async function analyzeDocumentPages(pagesBase64: string[]): Promise<Field[]> {
+export async function analyzeSinglePage(pageBase64: string, pageIndex: number, modelName: string = 'gemini-3-flash-preview'): Promise<Field[]> {
   const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini API key is missing');
 
   const ai = new GoogleGenAI({ apiKey });
-  let allFields: Field[] = [];
-
-  for (let i = 0; i < pagesBase64.length; i++) {
-    const base64Data = pagesBase64[i].split(',')[1];
-    
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: base64Data,
-            },
-          },
-          {
-            text: `Analyze this document page. Identify all the fields that need to be filled out by a company applying for this specification document (Cahier de Charge). 
-            Return a JSON array of objects, each with:
-            - id: a unique string identifier
-            - label: what information is requested (e.g., "Company Name", "Registration Number", "Date")
-            - type: "text", "date", "signature", "number", or "email"
-            - boundingBox: an object with ymin, xmin, ymax, xmax normalized between 0 and 1000.
-            Only include fields that are meant to be filled by the applicant.`,
-          },
-        ],
-      },
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              id: { type: Type.STRING },
-              label: { type: Type.STRING },
-              type: { type: Type.STRING },
-              boundingBox: {
-                type: Type.OBJECT,
-                properties: {
-                  ymin: { type: Type.NUMBER },
-                  xmin: { type: Type.NUMBER },
-                  ymax: { type: Type.NUMBER },
-                  xmax: { type: Type.NUMBER },
-                },
-                required: ['ymin', 'xmin', 'ymax', 'xmax'],
-              },
-            },
-            required: ['id', 'label', 'type', 'boundingBox'],
+  const base64Data = pageBase64.split(',')[1];
+  
+  const response = await ai.models.generateContent({
+    model: modelName,
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            mimeType: 'image/jpeg',
+            data: base64Data,
           },
         },
+        {
+          text: `Analyze this document page. Identify all the fields that need to be filled out by a company applying for this specification document (Cahier de Charge). 
+          Return a JSON array of objects, each with:
+          - id: a unique string identifier
+          - label: what information is requested (e.g., "Company Name", "Registration Number", "Date")
+          - type: "text", "date", "signature", "number", or "email"
+          - boundingBox: an object with ymin, xmin, ymax, xmax normalized between 0 and 1000.
+          Only include fields that are meant to be filled by the applicant.`,
+        },
+      ],
+    },
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.STRING },
+            label: { type: Type.STRING },
+            type: { type: Type.STRING },
+            boundingBox: {
+              type: Type.OBJECT,
+              properties: {
+                ymin: { type: Type.NUMBER },
+                xmin: { type: Type.NUMBER },
+                ymax: { type: Type.NUMBER },
+                xmax: { type: Type.NUMBER },
+              },
+              required: ['ymin', 'xmin', 'ymax', 'xmax'],
+            },
+          },
+          required: ['id', 'label', 'type', 'boundingBox'],
+        },
       },
-    });
+    },
+  });
 
-    if (response.text) {
-      try {
-        const pageFields = JSON.parse(response.text);
-        allFields = [
-          ...allFields,
-          ...pageFields.map((f: any) => ({ ...f, pageIndex: i })),
-        ];
-      } catch (e) {
-        console.error('Failed to parse fields for page', i, e);
-      }
+  if (response.text) {
+    try {
+      const pageFields = JSON.parse(response.text);
+      return pageFields.map((f: any) => ({ ...f, pageIndex }));
+    } catch (e) {
+      console.error('Failed to parse fields for page', pageIndex, e);
     }
   }
+  return [];
+}
 
+export async function analyzeDocumentPages(pagesBase64: string[]): Promise<Field[]> {
+  let allFields: Field[] = [];
+  for (let i = 0; i < pagesBase64.length; i++) {
+    const pageFields = await analyzeSinglePage(pagesBase64[i], i);
+    allFields = [...allFields, ...pageFields];
+  }
   return allFields;
 }
 
 export async function chatWithAI(
-  messages: { role: 'user' | 'assistant'; content: string }[],
-  fields: Field[]
+  messages: ChatMessage[],
+  fields: Field[],
+  modelName: string = 'gemini-3-flash-preview'
 ): Promise<{ reply: string; updatedFields: { id: string; value: string }[] }> {
   const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini API key is missing');
@@ -115,13 +117,48 @@ If all fields are filled, tell the user they can now export the document.`;
     },
   };
 
-  const formattedMessages = messages.map(m => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
+  const formattedMessages = messages.map(m => {
+    const parts: any[] = [];
+    if (m.attachment) {
+      const supportedTypes = [
+        'application/pdf',
+        'text/plain',
+        'text/csv',
+        'text/html',
+        'text/xml',
+        'application/rtf',
+        'text/rtf',
+        'application/json',
+        'text/markdown',
+        'text/md'
+      ];
+      
+      const isImage = m.attachment.mimeType.startsWith('image/');
+      const isAudio = m.attachment.mimeType.startsWith('audio/');
+      const isVideo = m.attachment.mimeType.startsWith('video/');
+      
+      if (isImage || isAudio || isVideo || supportedTypes.includes(m.attachment.mimeType)) {
+        parts.push({
+          inlineData: {
+            mimeType: m.attachment.mimeType,
+            data: m.attachment.data,
+          }
+        });
+      } else {
+        console.warn(`Skipping unsupported attachment with MIME type: ${m.attachment.mimeType}`);
+      }
+    }
+    if (m.content) {
+      parts.push({ text: m.content });
+    }
+    return {
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts,
+    };
+  });
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: modelName,
     contents: formattedMessages,
     config: {
       systemInstruction,

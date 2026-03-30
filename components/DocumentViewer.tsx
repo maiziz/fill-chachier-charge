@@ -3,17 +3,21 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Field } from '../types';
 import { Rnd } from 'react-rnd';
+import { Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight, Plus, Minus, Copy, PlusSquare, RotateCcw, RotateCw } from 'lucide-react';
 
 interface DocumentViewerProps {
   pages: string[];
   fields: Field[];
   isHandwritten: boolean;
   onUpdateField: (id: string, updates: Partial<Field>) => void;
+  onCloneField: (id: string) => void;
+  onAddField: (pageIndex: number) => void;
 }
 
-export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField }: DocumentViewerProps) {
+export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField, onCloneField, onAddField }: DocumentViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [imageDimensions, setImageDimensions] = useState<{ [key: number]: { width: number; height: number } }>({});
+  const [activeFieldId, setActiveFieldId] = useState<string | null>(null);
 
   const handleImageLoad = (index: number, e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
@@ -24,7 +28,9 @@ export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField }: 
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-stone-200 p-8 flex flex-col items-center space-y-8" ref={containerRef}>
+    <div className="flex-1 overflow-y-auto bg-stone-200 p-8 flex flex-col items-center space-y-8" ref={containerRef} onClick={(e) => {
+      if (e.target === containerRef.current) setActiveFieldId(null);
+    }}>
       {pages.map((page, index) => {
         const pageFields = fields.filter((f) => f.pageIndex === index);
         const dimensions = imageDimensions[index] || { width: 800, height: 1131 };
@@ -33,9 +39,17 @@ export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField }: 
           <div
             key={index}
             id={`pdf-page-${index}`}
-            className="relative bg-white shadow-xl rounded-sm overflow-hidden"
+            className="relative bg-white shadow-xl rounded-sm overflow-hidden group/page"
             style={{ width: '800px', minHeight: '1131px' }} // A4 aspect ratio approx
           >
+            <button
+              onClick={() => onAddField(index)}
+              className="absolute top-4 right-4 z-30 bg-white/90 hover:bg-white p-2 rounded-md shadow-md text-stone-600 opacity-0 group-hover/page:opacity-100 transition-opacity flex items-center gap-2 border border-stone-200"
+              title="Add manual text field"
+            >
+              <PlusSquare size={16} className="text-amber-600" />
+              <span className="text-xs font-medium">Add Field</span>
+            </button>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={page}
@@ -53,12 +67,14 @@ export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField }: 
 
               const hasValue = !!field.value;
               const isArabic = field.value ? /[\u0600-\u06FF]/.test(field.value) : false;
+              const isActive = activeFieldId === field.id;
 
               return (
                 <Rnd
                   key={field.id}
-                  className={`absolute flex items-end pb-1 px-1 overflow-hidden group
+                  className={`absolute flex items-end pb-1 px-1 overflow-visible group z-10
                     ${!hasValue ? 'border border-dashed border-amber-400 bg-amber-400/10' : 'hover:border hover:border-dashed hover:border-blue-400 hover:bg-blue-400/10'}
+                    ${isActive ? 'active-ring ring-2 ring-blue-500 z-20' : ''}
                   `}
                   bounds="parent"
                   position={{ x: left, y: top }}
@@ -85,28 +101,65 @@ export function DocumentViewer({ pages, fields, isHandwritten, onUpdateField }: 
                     });
                   }}
                   title={field.label}
+                  onClick={() => setActiveFieldId(field.id)}
                 >
                   {/* Drag Handle */}
                   <div className="drag-handle absolute top-0 left-0 w-4 h-4 bg-blue-500/50 cursor-move opacity-0 group-hover:opacity-100 transition-opacity z-10 rounded-br-sm" title="Drag to move" />
                   
+                  {/* Floating Toolbar */}
+                  {isActive && (
+                    <div className="floating-toolbar absolute -top-10 left-0 bg-white shadow-lg rounded-md border border-stone-200 flex items-center p-1 gap-1 z-50">
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontWeight: field.styles?.fontWeight === 'bold' ? 'normal' : 'bold' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.fontWeight === 'bold' ? 'bg-stone-200' : ''}`}><Bold size={14} /></button>
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontStyle: field.styles?.fontStyle === 'italic' ? 'normal' : 'italic' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.fontStyle === 'italic' ? 'bg-stone-200' : ''}`}><Italic size={14} /></button>
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, textDecoration: field.styles?.textDecoration === 'underline' ? 'none' : 'underline' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.textDecoration === 'underline' ? 'bg-stone-200' : ''}`}><Underline size={14} /></button>
+                      <div className="w-px h-4 bg-stone-300 mx-1" />
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, textAlign: 'left' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.textAlign === 'left' || !field.styles?.textAlign ? 'bg-stone-200' : ''}`}><AlignLeft size={14} /></button>
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, textAlign: 'center' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.textAlign === 'center' ? 'bg-stone-200' : ''}`}><AlignCenter size={14} /></button>
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, textAlign: 'right' }})} className={`p-1 rounded hover:bg-stone-100 ${field.styles?.textAlign === 'right' ? 'bg-stone-200' : ''}`}><AlignRight size={14} /></button>
+                      <div className="w-px h-4 bg-stone-300 mx-1" />
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontSize: (field.styles?.fontSize || (isHandwritten ? 24 : 14)) - 2 }})} className="p-1 rounded hover:bg-stone-100"><Minus size={14} /></button>
+                      <span className="text-xs font-medium w-4 text-center">{field.styles?.fontSize || (isHandwritten ? 24 : 14)}</span>
+                      <button onClick={() => onUpdateField(field.id, { styles: { ...field.styles, fontSize: (field.styles?.fontSize || (isHandwritten ? 24 : 14)) + 2 }})} className="p-1 rounded hover:bg-stone-100"><Plus size={14} /></button>
+                      <div className="w-px h-4 bg-stone-300 mx-1" />
+                      <button onClick={() => {
+                        const currentRotation = parseInt(field.styles?.transform?.replace(/[^0-9-]/g, '') || '0');
+                        onUpdateField(field.id, { styles: { ...field.styles, transform: `rotate(${currentRotation - 1}deg)` }});
+                      }} className="p-1 rounded hover:bg-stone-100" title="Rotate Left"><RotateCcw size={14} /></button>
+                      <button onClick={() => {
+                        const currentRotation = parseInt(field.styles?.transform?.replace(/[^0-9-]/g, '') || '0');
+                        onUpdateField(field.id, { styles: { ...field.styles, transform: `rotate(${currentRotation + 1}deg)` }});
+                      }} className="p-1 rounded hover:bg-stone-100" title="Rotate Right"><RotateCw size={14} /></button>
+                      <div className="w-px h-4 bg-stone-300 mx-1" />
+                      <button onClick={() => onCloneField(field.id)} className="p-1 rounded hover:bg-stone-100 text-blue-600" title="Clone Field"><Copy size={14} /></button>
+                    </div>
+                  )}
+
                   {hasValue ? (
-                    <input
-                      type="text"
+                    <textarea
                       value={field.value || ''}
                       onChange={(e) => onUpdateField(field.id, { value: e.target.value })}
+                      onFocus={() => setActiveFieldId(field.id)}
                       className={`
-                        w-full bg-transparent border-none outline-none text-blue-900 leading-none truncate
-                        ${isHandwritten ? (isArabic ? 'font-handwriting-arabic text-2xl -rotate-1 origin-bottom-left' : 'font-handwriting-latin text-2xl -rotate-1 origin-bottom-left') : 'font-sans text-sm'}
+                        w-full h-full bg-transparent border-none outline-none text-blue-900 leading-tight resize-none overflow-hidden
+                        ${isHandwritten ? (isArabic ? 'font-handwriting-arabic' : 'font-handwriting-latin') : 'font-sans'}
                       `}
+                      style={{
+                        fontSize: field.styles?.fontSize ? `${field.styles.fontSize}px` : (isHandwritten ? '24px' : '14px'),
+                        textAlign: field.styles?.textAlign || 'left',
+                        textDecoration: field.styles?.textDecoration || 'none',
+                        fontWeight: field.styles?.fontWeight || 'normal',
+                        fontStyle: field.styles?.fontStyle || 'normal',
+                        transform: field.styles?.transform || 'none',
+                      }}
                       dir={isArabic ? 'rtl' : 'ltr'}
                     />
                   ) : (
                     <div className="w-full h-full flex flex-col justify-end">
-                      <input
-                        type="text"
+                      <textarea
                         placeholder={field.label}
                         onChange={(e) => onUpdateField(field.id, { value: e.target.value })}
-                        className="w-full bg-transparent border-none outline-none text-[10px] text-amber-600 font-medium truncate placeholder:text-amber-600/70"
+                        onFocus={() => setActiveFieldId(field.id)}
+                        className="w-full h-full bg-transparent border-none outline-none text-[10px] text-amber-600 font-medium resize-none overflow-hidden placeholder:text-amber-600/70"
                       />
                     </div>
                   )}

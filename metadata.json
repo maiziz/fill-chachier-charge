@@ -1,5 +1,7 @@
 {
   "name": "Cahier de Charge Automator",
   "description": "AI-powered tool to automate filling out specification documents with handwritten overlays.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }
